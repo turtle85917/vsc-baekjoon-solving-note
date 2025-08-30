@@ -12,10 +12,15 @@
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
-    "commands": [
+    "customEditors": [
       {
-        "command": "solving-note.helloWorld",
-        "title": "Hello World"
+        "viewType": "solving-note.customEditor",
+        "displayName": "Readme File Editor",
+        "selector": [
+          {
+            "filenamePattern": "README.md"
+          }
+        ]
       }
     ]
   },
