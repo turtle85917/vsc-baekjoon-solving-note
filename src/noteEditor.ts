@@ -1,9 +1,11 @@
 import * as vscode from "vscode";
 
-const REGEX_HEADER = /# (.+)/g;
-const REGEX_SOLVING_DATE = /- (\d{4}\/\d{2}\/\d{2})/g;
+const REGEX_HEADER = /^#{1} (.+)/gm;
+const REGEX_SOLVING_DATE = /- (\d{4}\/\d{2}\/\d{2}(?: ~ \d{4}\/\d{2}\/\d{2})?)/g;
 const REGEX_SOLVING_ITEM = /^\s{2}- \[<img .*?tier_small\/(s?\d+)\.svg".*?> (\d+)\]\(.*?\)(.*)$/m;
 const REGEX_API_URI = /https:\/\/mazassumnida\.wtf\/api\/v2\/generate_badge\?boj=(.+?)\)/;
+
+const REFRESH_AT = 60 * 60 * 24 * 7 * 1000; // 7 days (unit: ms)
 
 export class NoteEditor implements vscode.CustomTextEditorProvider{
   public static register(context:vscode.ExtensionContext):vscode.Disposable{
@@ -57,22 +59,57 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
         }
       }
       // Send solved.ac api
-      const user = await(await fetch(`https://solved.ac/api/v3/user/show?handle=${username}`)).json() as SolvedacUser;
-      const background = await(await fetch(`https://solved.ac/api/v3/background/show?backgroundId=${user.backgroundId}`)).json() as SolvedacBackground;
+      const cache = this.context.workspaceState.get<UserInfoInWorkspace|null>("userInfo", null);
+      let user:SolvedacUser, background:SolvedacBackground;
+      if(cache === null || Date.now() - cache.updatedAt >= REFRESH_AT){
+        user = await(await fetch(`https://solved.ac/api/v3/user/show?handle=${username}`)).json() as SolvedacUser;
+        background = await(await fetch(`https://solved.ac/api/v3/background/show?backgroundId=${user.backgroundId}`)).json() as SolvedacBackground;
+        this.context.workspaceState.update("userInfo", {
+          user,
+          background,
+          updatedAt: Date.now()
+        });
+      }else{
+        user = cache.user;
+        background = cache.background;
+        console.log("Loaded saved data!");
+      }
       // Send contexts
       webviewPanel.webview.postMessage({
         type: "update",
         chunk: contexts,
-        user, background,
-        streak: list
+        streak: list,
+        savedScrollY: this.context.workspaceState.get("scrollY", 0)
+      });
+      webviewPanel.webview.postMessage({
+        type: "updateUser",
+        user, background
       });
     };
     updateWebview();
     webviewPanel.onDidChangeViewState(event => {
       if(event.webviewPanel.visible) updateWebview();
     });
-    webviewPanel.webview.onDidReceiveMessage(event => {
-        if(event.type === "openProfile")  vscode.env.openExternal(vscode.Uri.parse(`https://solved.ac/profile/${event.username}`));
+    webviewPanel.webview.onDidReceiveMessage(async event => {
+      if(event.type === "openProfile") vscode.env.openExternal(vscode.Uri.parse(`https://solved.ac/profile/${event.username}`));
+      if(event.type === "forceUpdate"){
+        const user = await(await fetch(`https://solved.ac/api/v3/user/show?handle=${event.username}`)).json() as SolvedacUser;
+        const background = await(await fetch(`https://solved.ac/api/v3/background/show?backgroundId=${user.backgroundId}`)).json() as SolvedacBackground;
+        this.context.workspaceState.update("userInfo", {
+          user,
+          background,
+          updatedAt: Date.now()
+        });
+        console.log("Updated user!");
+        webviewPanel.webview.postMessage({
+          type: "updateUser",
+          user, background
+        });
+      }
+      if(event.type === "saveScroll"){
+        this.context.workspaceState.update("scrollY", event.scrollY);
+        console.log(`Updated scroll y: ${event.scrollY}`);
+      }
     });
   }
 
@@ -97,6 +134,12 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
           <div class="history">
             <div class="title">문제 풀이 기록</div>
             <div class="list"></div>
+          </div>
+          <div class="etc"></div>
+          <div class="option">
+            <div class="btn plus"><i data-lucide="plus"></i></div>
+            <div class="btn recent"><i data-lucide="chevrons-down"></i></div>
+            <div class="btn refresh"><i data-lucide="rotate-ccw"></i></div>
           </div>
         </div>
         <style>
@@ -150,6 +193,7 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
             border-radius: 9999px;
             margin-top: 10px;
             transform-origin: top;
+            will-change: transform;
           }
           div.history > div.list > div.item:last-child > div.line{
             height: 100%;
@@ -160,8 +204,12 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
             font-size: 12pt;
             line-height: 20px;
           }
+          div.history > div.list > div.item > div.content,
+          div.history > div.list > div.item > div.problem{
+            will-change: transform, opacity;
+          }
           div.history > div.list > div.item > div.content{
-            margin-left: 40px;
+            margin-left: 20px;
             color: gray;
             font-size: 12pt;
           }
@@ -184,11 +232,39 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
           div.history > div.list > div.item > div.problem > div.id{
             font-size: 12pt;
           }
+          div.etc{
+            font-size: 11pt;
+            margin-left: 10px;
+          }
+          div.option{
+            position: fixed;
+            display: flex;
+            gap: 16px;
+            bottom: 20px;
+            right: 20px;
+          }
+          div.option > div.btn{
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 9999px;
+            background-color: transparent;
+            cursor: pointer;
+          }
+          div.option > div.btn > svg{
+            width: 28px;
+            height: 28px;
+          }
         </style>
+        <script src="https://unpkg.com/lucide@latest"></script>
+        <script src="https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/motion@latest/dist/motion.js"></script>
         <script>
           const {animate, hover, scroll, press} = Motion;
           const vscode = acquireVsCodeApi();
+          lucide.createIcons();
           // User
           const userBackground = document.querySelector("div.container > div.user > img.background");
           const userProfileName = document.querySelector("div.container > div.user > div.profile > span.name");
@@ -200,9 +276,21 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
           const dateElements = [];
           const lineElements = [];
 
+          // Etc
+          const $etc = document.querySelector("div.container > div.etc");
+          const makeButton = document.querySelector("div.option > div.btn.plus");
+          const recentButton = document.querySelector("div.option > div.btn.recent");
+          const refreshButton = document.querySelector("div.option > div.btn.refresh");
+          const springConfig = {type: "spring", stiffness: 400, damping: 20};
+
+          document.documentElement.style.setProperty("opacity", 0);
+          window.addEventListener("DOMContentLoaded", () => {
+            setTimeout(() => document.documentElement.style.setProperty("opacity", 1), 10);
+          });
+
           hover(userProfileName, el => {
-            animate(el, {scale: 1.3}, {type: "spring", stiffness: 400, damping: 10});
-            return () => animate(el, {scale: 1, rotate: "0deg"}, {type: "spring", stiffness: 400, damping: 20});
+            animate(el, {scale: 1.3}, springConfig);
+            return () => animate(el, {scale: 1, rotate: "0deg"});
           });
           press(userProfileName, el => {
             animate(el, {rotate: "-10deg"}, {type: "spring", sitffness: 600, damping: 15});
@@ -210,16 +298,33 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
             return () => animate(el, {rotate: "0deg"});
           });
 
+          [makeButton, recentButton, refreshButton].forEach(btn => {
+            hover(btn, () => {
+              animate(btn, {backgroundColor: "rgba(255, 255, 255, 0.3)"}, {duration: 0.3});
+              return () => animate(btn, {backgroundColor: "transparent"});
+            });
+            press(btn, () => {
+              if(btn.classList[1] === "recent") dateElements.at(-1).scrollIntoView({behavior: "smooth", block: "start"});
+              if(btn.classList[1] === "refresh" && userProfileName.textContent)
+                vscode.postMessage({type: "forceUpdate", username: userProfileName.textContent});
+              animate(btn, {scale: 0.8}, springConfig);
+              return () => animate(btn, {scale: 1}, springConfig);
+            });
+          });
+
           window.addEventListener("message", event => {
             const {type} = event.data;
-            if(type === "update"){
-              const {chunk, user, background, streak} = event.data;
-              console.log(streak);
+            if(type === "updateUser"){
+              const {user, background} = event.data;
               userBackground.src = background.backgroundImageUrl;
               userProfileName.textContent = user.handle;
               userProfile.src = user.profileImageUrl;
               userProfileTier.src = \`https://static.solved.ac/tier_small/\${user.tier}.svg\`;
-
+            }
+            if(type === "update"){
+              const {chunk, streak, savedScrollY} = event.data;
+              console.log(streak);
+              $etc.innerHTML = marked.parse(chunk.slice(3).join("\\n"));
               for(const item of streak){
                 const itemElement = document.createElement("div");
                 itemElement.classList.add("item");
@@ -235,7 +340,7 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
                 if(typeof item[1] === "string"){
                   const textElement = document.createElement("div");
                   textElement.classList.add("content");
-                  textElement.innerHTML = item[1];
+                  textElement.innerHTML = marked.parse(item[1]);
                   itemElement.appendChild(textElement);
                 }
                 else{
@@ -261,15 +366,31 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
                 }
                 historyList.appendChild(itemElement);
               }
-            }
-            lineElements.forEach(line => {
-              scroll(animate(line, {scaleY: [0, 1, 1, 0]}), {
-                target: line,
-                offset: ["start 0.8", "end 0.8", "start 0.2", "end 0.2"]
+              lineElements.forEach(line => {
+                scroll(animate(line, {scaleY: [0, 1, 1, 0]}), {
+                  target: line,
+                  offset: ["start 0.8", "end 0.8", "start 0.2", "end 0.2"]
+                });
               });
-            });
+              document.scrollingElement.scroll({top: savedScrollY});
+            }
           });
 
+          const saveScrollThrottle = throttle(() => {
+            vscode.postMessage({type: "saveScroll", scrollY: window.scrollY});
+          }, 1000);
+          window.addEventListener("scroll", saveScrollThrottle);
+
+          function throttle(fn, limit){
+            let inThrottle = false;
+            return (...args) => {
+              if(!inThrottle){
+                fn(...args);
+                inThrottle = true;
+                setTimeout(() => inThrottle = false, limit);
+              }
+            };
+          }
 
           // 해당 코드 출처 : https://github.com/solved-ac/help.solved.ac/blob/main/utils/color/tier.ts
           function tierColor(value){

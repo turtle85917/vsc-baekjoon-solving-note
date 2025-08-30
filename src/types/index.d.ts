@@ -11,6 +11,12 @@ interface SolvedacBackground{
   backgroundImageUrl:string;
 }
 
+interface UserInfoInWorkspace{
+  user:SolvedacUser;
+  background:SolvedacBackground;
+  updatedAt:number;
+}
+
 type ProblemItem = [string, ...(string|ProblemInfo)[]];
 interface ProblemInfo{
   problemId:string;
