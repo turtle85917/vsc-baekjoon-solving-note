@@ -71,10 +71,9 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
     webviewPanel.onDidChangeViewState(event => {
       if(event.webviewPanel.visible) updateWebview();
     });
-    // webviewPanel.webview.onDidReceiveMessage(event => {
-    //   if(event.type === "edit"){
-    //   }
-    // });
+    webviewPanel.webview.onDidReceiveMessage(event => {
+        if(event.type === "openProfile")  vscode.env.openExternal(vscode.Uri.parse(`https://solved.ac/profile/${event.username}`));
+    });
   }
 
   constructor(private readonly context:vscode.ExtensionContext){}
@@ -102,7 +101,7 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
         </div>
         <style>
           div.container > div.user > img.background{
-            border-radius: 4px;
+            border-radius: 12px;
           }
           div.container > div.user > div.profile{
             display: flex;
@@ -112,10 +111,10 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
           }
           div.container > div.user > div.profile > div.my{
             position: relative;
-            width: 120px;
+            width: 128px;
           }
           div.container > div.user > div.profile > div.my > img.profile{
-            width: 120px;
+            width: 128px;
             height: 128px;
             border: 0;
             border-radius: 9999px;
@@ -131,6 +130,7 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
           div.container > div.user > div.profile > span.name{
             margin-left: 10px;
             font-size: 16pt;
+            cursor: pointer;
           }
           div.history > div.title{
             font-size: 16pt;
@@ -149,6 +149,7 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
             background-color: rgba(255, 255, 255, 0.3);
             border-radius: 9999px;
             margin-top: 10px;
+            transform-origin: top;
           }
           div.history > div.list > div.item:last-child > div.line{
             height: 100%;
@@ -157,6 +158,7 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
             margin-left: 12px;
             margin-bottom: 12px;
             font-size: 12pt;
+            line-height: 20px;
           }
           div.history > div.list > div.item > div.content{
             margin-left: 40px;
@@ -172,6 +174,9 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
             padding: 15px 10px;
             padding-left: 20px;
             border-radius: 12px;
+            box-shadow: 0 2px 0 var(--tier-color);
+            cursor: pointer;
+            opacity: 0.3;
           }
           div.history > div.list > div.item > div.problem > img.tier{
             width: 14px;
@@ -180,7 +185,9 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
             font-size: 12pt;
           }
         </style>
+        <script src="https://cdn.jsdelivr.net/npm/motion@latest/dist/motion.js"></script>
         <script>
+          const {animate, hover, scroll, press} = Motion;
           const vscode = acquireVsCodeApi();
           // User
           const userBackground = document.querySelector("div.container > div.user > img.background");
@@ -190,6 +197,18 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
 
           // History
           const historyList = document.querySelector("div.history > div.list");
+          const dateElements = [];
+          const lineElements = [];
+
+          hover(userProfileName, el => {
+            animate(el, {scale: 1.3}, {type: "spring", stiffness: 400, damping: 10});
+            return () => animate(el, {scale: 1, rotate: "0deg"}, {type: "spring", stiffness: 400, damping: 20});
+          });
+          press(userProfileName, el => {
+            animate(el, {rotate: "-10deg"}, {type: "spring", sitffness: 600, damping: 15});
+            vscode.postMessage({type: "openProfile", username: userProfileName.textContent || "shiftpsh"});
+            return () => animate(el, {rotate: "0deg"});
+          });
 
           window.addEventListener("message", event => {
             const {type} = event.data;
@@ -207,10 +226,12 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
                 const lineElement = document.createElement("div");
                 lineElement.classList.add("line");
                 itemElement.appendChild(lineElement);
+                lineElements.push(lineElement);
                 const dateElement = document.createElement("div");
                 dateElement.classList.add("date");
                 dateElement.textContent = item[0];
                 itemElement.appendChild(dateElement);
+                dateElements.push(dateElement);
                 if(typeof item[1] === "string"){
                   const textElement = document.createElement("div");
                   textElement.classList.add("content");
@@ -221,6 +242,7 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
                   for(const problem of item.slice(1)){
                     const problemElement = document.createElement("div");
                     problemElement.classList.add("problem");
+                    problemElement.style.setProperty("--tier-color", tierColor(problem.problemTier))
                     const problemTierElement = document.createElement("img");
                     const problemIdElement = document.createElement("div");
                     problemTierElement.classList.add("tier");
@@ -230,12 +252,70 @@ export class NoteEditor implements vscode.CustomTextEditorProvider{
                     problemElement.appendChild(problemTierElement);
                     problemElement.appendChild(problemIdElement);
                     itemElement.appendChild(problemElement);
+
+                    hover(problemElement, el => {
+                      animate(problemElement, {y: -10, opacity: 1}, {type: "spring", stiffness: 600, damping: 20});
+                      return () => animate(problemElement, {y: 0, opacity: 0.3}, {type: "spring", stiffness: 600, damping: 20});
+                    });
                   }
                 }
                 historyList.appendChild(itemElement);
               }
             }
+            lineElements.forEach(line => {
+              scroll(animate(line, {scaleY: [0, 1, 1, 0]}), {
+                target: line,
+                offset: ["start 0.8", "end 0.8", "start 0.2", "end 0.2"]
+              });
+            });
           });
+
+
+          // 해당 코드 출처 : https://github.com/solved-ac/help.solved.ac/blob/main/utils/color/tier.ts
+          function tierColor(value){
+            if (value.startsWith("s")) return "#96cc00";
+
+            // bronze
+            if (value === "1") return "#9d4900";
+            if (value === "2") return "#a54f00";
+            if (value === "3") return "#ad5600";
+            if (value === "4") return "#b55d0a";
+            if (value === "5") return "#c67739";
+            // silver
+            if (value === "6") return "#38546e";
+            if (value === "7") return "#3d5a74";
+            if (value === "8") return "#435f7a";
+            if (value === "9") return "#496580";
+            if (value === "10") return "#4e6a86";
+            // gold
+            if (value === "11") return "#d28500";
+            if (value === "12") return "#df8f00";
+            if (value === "13") return "#ec9a00";
+            if (value === "14") return "#f9a518";
+            if (value === "15") return "#ffb028";
+            // platinum
+            if (value === "16") return "#00c78b";
+            if (value === "17") return "#00d497";
+            if (value === "18") return "#27e2a4";
+            if (value === "19") return "#3ef0b1";
+            if (value === "20") return "#51fdbd";
+            // diamond
+            if (value === "21") return "#009ee5";
+            if (value === "22") return "#00a9f0";
+            if (value === "23") return "#00b4fc";
+            if (value === "24") return "#2bbfff";
+            if (value === "25") return "#41caff";
+            // ruby
+            if (value === "26") return "#e0004c";
+            if (value === "27") return "#ea0053";
+            if (value === "28") return "#f5005a";
+            if (value === "29") return "#ff0062";
+            if (value === "30") return "#ff3071";
+            // master
+            if (value === "31") return "#b300e0";
+            // else
+            return "#2d2d2d";
+          };
         </script>
       </body>
       </html>
